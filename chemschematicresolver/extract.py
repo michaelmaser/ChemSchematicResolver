@@ -247,7 +247,7 @@ def find_image_candidates(figs, filename):
 # (centroid) of structure and/or label to be able to assemble into reaction
 #
 def extract_image(filename, debug=False, allow_wildcards=False, 
-                  confidence_threshold=None):
+                  confidence_threshold=None, count_false_positives=False):
     """ Converts a Figure containing chemical schematic diagrams to SMILES strings and extracted label candidates
 
     :param filename: Input file name for extraction
@@ -256,6 +256,7 @@ def extract_image(filename, debug=False, allow_wildcards=False,
     # mmaser added arg
     :param confidence_threshold: numerical in (0, 100) to determine tesserocr 
     cutoff for returning predicted labels/diagrams
+    :param count_false_positives: Bool to indicate whether or not to include false positive count in the function return. Only useful with reaction_batch_extract.
 
     :return : List of label candidates and smiles
     :rtype : list[tuple[list[string],string]]
@@ -391,15 +392,28 @@ def extract_image(filename, debug=False, allow_wildcards=False,
     total_smiles = smiles + r_smiles
 
     # Removing false positives from lack of labels or wildcard smiles
-    output = [smile for smile in total_smiles if is_false_positive(smile, allow_wildcards=allow_wildcards) is False]
+    #output = [smile for smile in total_smiles if is_false_positive(smile, allow_wildcards=allow_wildcards) is False]
+    
+    # mmaser: add false_positive tag to be included with output
+    false_positives = 0
+    output = []
+    for smile in total_smiles:
+        if is_false_positive(smile, allow_wildcards=allow_wildcards) is False:
+            output.append(smile)
+        else:
+            false_positives += 1
     
     if len(total_smiles) != len(output):
         log.warning('Some SMILES strings were determined to be false positives and were removed from the output.')
+        log.info(f'{false_positives} false positives found.')
 
     log.info('Final Results : ')
     for result in output:
         log.info(result)
 
+    if count_false_positives is True:
+        return output, false_positives
+        
     return output
 
 
@@ -472,8 +486,8 @@ def extract_images(dirname, debug=False, allow_wildcards=False):
 # mmaser: adding function for reaction scheme extraction
 # current on 07/15/2020
 # TODO 
-def extract_reaction_batch(dirname, out_file=None, debug=False, allow_wildcards=False, 
-                  confidence_threshold=None):
+def extract_reaction_batch(dirname, out_file=None, debug=False, 
+                           allow_wildcards=False, confidence_threshold=None):
     """
     Extracts structures from batch of chemical reaction scheme images.
     
@@ -493,7 +507,8 @@ def extract_reaction_batch(dirname, out_file=None, debug=False, allow_wildcards=
     RETURNS:
         (dict)output_dict: dictionary containing all information about the batch of images
         
-    output_dict is saved to json file.
+    output_dict is saved to json file. currently runs extract_image with 
+    count_false_positives=True only.
     """
 
     try:
@@ -513,16 +528,14 @@ def extract_reaction_batch(dirname, out_file=None, debug=False, allow_wildcards=
             continue
         
         image_dict = {}
-        # get list of (label, smiles, center) tuples from image
-        try:
-            image_output = extract_image(os.path.join(dirname, image), debug=debug,
-                                         allow_wildcards=allow_wildcards,
-                                         confidence_threshold=confidence_threshold)
-        except:
-            image_output = []
+        # get list of (label, smiles, center) tuples from image as well as
+        # the number of false positives (count_false_positives=True returns 
+        # both output list and number of false_positives)
+        image_output, image_false_positives = extract_image(os.path.join(dirname, image), debug=debug, allow_wildcards=allow_wildcards, confidence_threshold=confidence_threshold, count_false_positives=True)
         
         # fill image dictionary with metadata and extracted structure info
         image_dict['num_structures'] = len(image_output)
+        image_dict['false_positives'] = image_false_positives
         
         if len(image_output) > 0:
             # add predictions to image dictionary
@@ -538,29 +551,30 @@ def extract_reaction_batch(dirname, out_file=None, debug=False, allow_wildcards=
     if not out_file == None:
         if not out_file.endswith('.json'):
             try:
-                output = os.path.join(dirname, f'{out_file}.json')
+                output = os.path.join(dirname, str(out_file))
             except:
-                output = os.path.join(dirname, 'output.json')
+                output = os.path.join(dirname, 'output')
         else:
             try:
-                output = os.path.join(dirname, out_file)
+                out_name = out_file.split('.')[0]
+                output = os.path.join(dirname, out_name)
             except:
-                output = os.path.join(dirname, 'output.json')
+                output = os.path.join(dirname, 'output')
                 
     else:
-        output = os.path.join(dirname, 'output.json')
+        output = os.path.join(dirname, 'output')
     
     # check if out_file already exists and adjust name with counter
     path_count = 1
-    while os.path.exists(output):
-        new_name = output.split('.')[0] + f'-{path_count}'
-        output = f'{new_name}.json'
+    path_name = output
+    while os.path.exists(f'{output}.json'):
+        output = f'{path_name}-{path_count}'
         path_count +=1
         if path_count > 100:
             log.warning('out_file already exists, please choose a new name.')
             break
     
-    with open(output, 'w') as data_file:
+    with open(f'{output}.json', 'w') as data_file:
         json.dump(batch_dict, data_file)
         
     return batch_dict
