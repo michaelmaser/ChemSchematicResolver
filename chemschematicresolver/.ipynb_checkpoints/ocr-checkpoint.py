@@ -67,7 +67,6 @@ def read_label(fig, label, whitelist=LABEL_WHITELIST):
     img = convert_greyscale(fig.img)
     cropped_img = crop(img, label.left, label.right, label.top, label.bottom)
     padded_img = pad(cropped_img, size, mode='constant', constant_values=(1, 1))
-    # mmaser get_text returns a list of text 'blocks'
     text = get_text(padded_img, x_offset=label.left, y_offset=label.top, psm=PSM.SINGLE_BLOCK, whitelist=whitelist)
     if not text:
         label.text = []

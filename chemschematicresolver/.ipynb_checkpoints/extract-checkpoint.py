@@ -28,8 +28,6 @@ import os
 import urllib
 import math
 import tarfile, zipfile
-# mmaser adding import json for extract_reaction_batch output format
-import json
 
 from chemdataextractor import Document
 
@@ -242,20 +240,13 @@ def find_image_candidates(figs, filename):
 
     return csd_imgs
 
-# mmaser: adding confidence threshold as arg to be adjustable
-# TODO mmaser: try adding property .loc on smiles[i:j] in output for x_pos 
-# (centroid) of structure and/or label to be able to assemble into reaction
-#
-def extract_image(filename, debug=False, allow_wildcards=False, 
-                  confidence_threshold=None):
+
+def extract_image(filename, debug=False, allow_wildcards=False):
     """ Converts a Figure containing chemical schematic diagrams to SMILES strings and extracted label candidates
 
     :param filename: Input file name for extraction
     :param debug: Bool to indicate debugging
     :param allow_wildcards: Bool to indicate whether results containing wildcards are permitted
-    # mmaser added arg
-    :param confidence_threshold: numerical in (0, 100) to determine tesserocr 
-    cutoff for returning predicted labels/diagrams
 
     :return : List of label candidates and smiles
     :rtype : list[tuple[list[string],string]]
@@ -268,35 +259,19 @@ def extract_image(filename, debug=False, allow_wildcards=False,
     extension = filename.split('.')[-1]
 
     # Confidence threshold for OCR results
-    # mmaser: converting to conditional based on added arg
-    if not confidence_threshold == None:   
-        try:
-            confidence_threshold = float(confidence_threshold)
-        except:
-            # set to default from original csr work
-            confidence_threshold = 73.7620468139648
-            log.debug('Unable to convert confidence_threshold to float, setting to default 73.762')
-    else:
-        log.info('No confidence_threshold provided, setting to default 73.762')
-        confidence_threshold = 73.7620468139648
+    confidence_threshold = 73.7620468139648
 
     # Read in float and raw pixel images
     fig = imread(filename)
     fig_bbox = fig.get_bounding_box()
 
     # Segment image into pixel islands
-    # mmaser: returns list of bounding boxes as panel objects
-    # can call self.tag on each panel object and sort to get ordered list
-    # can also call self.centroid to get bbox center of each Panel 
     panels = segment(fig)
 
     # Initial classify of images, to account for merging in segmentation
-    # mmaser: believe labels and diags have self.center property but is (x, y)
     labels, diags = classify_kmeans(panels, fig)
 
     # Preprocess image (eg merge labels that are small into larger labels)
-    # mmaser: can still call self.tag on each label and diag in the lists  
-    # outputted here (are lists of panel objects) and sort to get ordered list
     labels, diags = preprocessing(labels, diags, fig)
 
     # Re-cluster by height if there are more Diagram objects than Labels
@@ -317,9 +292,6 @@ def extract_image(filename, debug=False, allow_wildcards=False,
             ['r', 'b', 'g', 'k', 'c', 'm', 'y', 'r', 'b', 'g', 'k', 'c', 'm', 'y', 'r', 'b', 'g', 'k', 'c', 'm', 'y'])
 
     # Add label information to the appropriate diagram by expanding bounding box
-    ###### mmaser #######
-    # may have to adjust return on label_diags to keep tag check output
-    # YES, done. should now order by tag, which should track with x_position
     labelled_diags = label_diags(labels, diags, fig_bbox)
     labelled_diags = remove_repeating(labelled_diags)
 
@@ -343,16 +315,6 @@ def extract_image(filename, debug=False, allow_wildcards=False,
             ax.text(label.left, label.top + label.height / 4, '[%s]' % label.tag, size=label.height / 5, color='r')
             ax.add_patch(label_rect)
 
-        ######## mmaser ########## start here 07/14/2020 to see what happens
-        # with labels (and thus diagrams) under the confidence threshold.
-        # read_label returns the same label with new property label.text 
-        # where .text is a list of tagged Sentence objects which are  
-        # constructed from the raw sentence list from a get_sentences call
-        # on the text blocks returned from a get_text call on the image, 
-        # which uses tesserocr to actually run the text prediction.
-        # conf is also returned from the get_text call which is the average
-        # confidence of the blocks returned by get_text, as calc'd by tesserocr
-        #
         # Read the label
         diag.label, conf = read_label(fig, label)
 
@@ -360,19 +322,12 @@ def extract_image(filename, debug=False, allow_wildcards=False,
             log.warning('Text could not be resolved from label %s' % label.tag)
 
         # Only extract images where the confidence is sufficiently high
-        ### mmaser: if this becomes problem with missing labels can adjust
-        ### schema to still run pyosra on panels with diagram but skip label
-        if not math.isnan(conf) and conf >= confidence_threshold:
+        if not math.isnan(conf) and conf > confidence_threshold:
 
-            # mmaser: last chance get diag.center now
-            #centroid = diag.center
-            
             # Add r-group variables if detected
             diag = detect_r_group(diag)
 
             # Get SMILES for output
-            ### mmaser: can also adjust call here for, e.g., get_graph
-            ### if ever decide to output graphs directly instead of smiles
             smiles, r_smiles = get_smiles(diag, smiles, r_smiles, extension)
 
         else:
@@ -385,14 +340,10 @@ def extract_image(filename, debug=False, allow_wildcards=False,
         ax.set_axis_off()
         plt.show()
 
-    # mmaser: smiles should be ordered list by position now
-    # mmaser: 07/14/2020 smiles and r_smiles are now 3-tuples
-    # with (label, smiles, center(2-tuple))
     total_smiles = smiles + r_smiles
 
     # Removing false positives from lack of labels or wildcard smiles
     output = [smile for smile in total_smiles if is_false_positive(smile, allow_wildcards=allow_wildcards) is False]
-    
     if len(total_smiles) != len(output):
         log.warning('Some SMILES strings were determined to be false positives and were removed from the output.')
 
@@ -469,103 +420,6 @@ def extract_images(dirname, debug=False, allow_wildcards=False):
     return results
 
 
-# mmaser: adding function for reaction scheme extraction
-# current on 07/15/2020
-# TODO 
-def extract_reaction_batch(dirname, out_file=None, debug=False, allow_wildcards=False, 
-                  confidence_threshold=None):
-    """
-    Extracts structures from batch of chemical reaction scheme images.
-    
-    Required imports:
-        chemschematicresolver as csr
-        csr.extract_image
-        json
-        os
-        
-    ARGUMENTS:
-        (str)dirname: directory containing a set of reaction images. should be full path to directory.
-        (str)out_file: file name for output json
-        (flt)confidence_threshold: tesserocr confidence cuttoff below which label/structure predictions will not be returned. Gets passed to extract_image.
-        (Bool)debug: Boolean specifying verbose debug mode.
-        (Bool)allow_wildcards: Boolean to indicate whether results containing wildcards are permitted
-        
-    RETURNS:
-        (dict)output_dict: dictionary containing all information about the batch of images
-        
-    output_dict is saved to json file.
-    """
-
-    try:
-        images = os.listdir(dirname)
-        log.info(f'Directory opened successfully. {len(images)} files found')
-    except:
-        log.warning('Could not get files in directory provided. Check that it is the full path of the desired directory')
-            
-    batch_dict = {}
-    for image in images:
-        # build image dictionary; so far have:
-        # 'num_structures'
-        # 'structure_i' with 'label', 'smiles', and center
-        
-        # check to make sure the file is an image
-        if not image.endswith(('.png', '.jpg', '.ppm', '.pdf')):
-            continue
-        
-        image_dict = {}
-        # get list of (label, smiles, center) tuples from image
-        try:
-            image_output = extract_image(os.path.join(dirname, image), debug=debug,
-                                         allow_wildcards=allow_wildcards,
-                                         confidence_threshold=confidence_threshold)
-        except:
-            image_output = []
-        
-        # fill image dictionary with metadata and extracted structure info
-        image_dict['num_structures'] = len(image_output)
-        
-        if len(image_output) > 0:
-            # add predictions to image dictionary
-            for i, struct in enumerate(image_output):
-                struct_dict = {'label': struct[0], 'smiles': struct[1],
-                               'center': struct[2]}
-                struct_name = f'structure_{i}'
-                image_dict[struct_name] = struct_dict
-            
-        batch_dict[image] = image_dict
-    
-    # generate json file from image_smiles_dict 
-    if not out_file == None:
-        if not out_file.endswith('.json'):
-            try:
-                output = os.path.join(dirname, f'{out_file}.json')
-            except:
-                output = os.path.join(dirname, 'output.json')
-        else:
-            try:
-                output = os.path.join(dirname, out_file)
-            except:
-                output = os.path.join(dirname, 'output.json')
-                
-    else:
-        output = os.path.join(dirname, 'output.json')
-    
-    # check if out_file already exists and adjust name with counter
-    path_count = 1
-    while os.path.exists(output):
-        new_name = output.split('.')[0] + f'-{path_count}'
-        output = f'{new_name}.json'
-        path_count +=1
-        if path_count > 100:
-            log.warning('out_file already exists, please choose a new name.')
-            break
-    
-    with open(output, 'w') as data_file:
-        json.dump(batch_dict, data_file)
-        
-    return batch_dict
-
-
 def get_smiles(diag, smiles, r_smiles, extension='jpg'):
     """ Extracts diagram information.
 
@@ -583,18 +437,14 @@ def get_smiles(diag, smiles, r_smiles, extension='jpg'):
         r_smiles_group = get_rgroup_smiles(diag, extension)
         for smile in r_smiles_group:
             label_cand_str = list(set([cand.text for cand in smile[0]]))
-            r_smiles.append((label_cand_str, smile[1], diag.center))
+            r_smiles.append((label_cand_str, smile[1]))
 
     # Resolve diagram normally if no R-groups - should just be one smile
     else:
         smile = read_diagram_pyosra(diag, extension)
         label_raw = diag.label.text
         label_cand_str = list(set([clean_output(cand.text) for cand in label_raw]))
-        # mmaser: adding '?' label for samples where no str label is detected
-        if len(label_cand_str) == 0:
-            label_cand_str = ['?']
 
-        # mmaser: added diag.center to smiles output
-        smiles.append((label_cand_str, smile, diag.center))
+        smiles.append((label_cand_str, smile))
 
     return smiles, r_smiles

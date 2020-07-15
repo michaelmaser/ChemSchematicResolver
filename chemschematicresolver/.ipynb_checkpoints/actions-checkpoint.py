@@ -24,8 +24,6 @@ from skimage.measure import regionprops
 import itertools
 import copy
 from scipy import ndimage as ndi
-# mmaser: add center_of_mass import for centroid recording
-#from ndi.measurements import center_of_mass
 from sklearn.cluster import KMeans
 import osra_rgroup
 
@@ -79,12 +77,8 @@ def segment(fig):
         log.debug("Segmentation kernel size = %s" % kernel)
 
     # Using a binary floodfill to identify panel regions
-    # mmaser: try adding .centroids here
     fill_img = binary_floodfill(closed_fig)
-    # mmaser: tag_img now has .centroids property which should be list of
-    # len num panels (tag_img is the fig, has .img (labels) too)
     tag_img = binary_tag(fill_img)
-    # mmaser: each panel in panels now has panel.centroid as (row, col)
     panels = get_bounding_box(tag_img)
 
     # Removing relatively tiny pixel islands that are determined to be noise
@@ -140,7 +134,6 @@ def get_labels_and_diagrams_k_means_clustering(panels, fig, skel=True):
         labels = group_1
 
     # Convert to appropriate types
-    # mmaser: up to here labels are still panels with .centroid property
     labels = [Label(label.left, label.right, label.top, label.bottom, label.tag) for label in labels]
     diags = [Diagram(diag.left, diag.right, diag.top, diag.bottom, diag.tag) for diag in diags]
     return labels, diags
@@ -187,15 +180,7 @@ def label_diags(labels, diags, fig_bbox):
     """
 
     # Sort diagrams from largest to smallest
-    # TODO mmaser change to sort by max(x_position) (actually have tags,
-    # see comments throughtout)
-    # YES should still be in order with x.tag
-    #diags.sort(key=lambda x: x.area, reverse=True)
-    # check what assign_label_to_diag does in next step before changing below
-    # should be okay, this step actually just expands bbox of each diag until
-    # it overlaps any label object, so ordering of diag really is what matters
-    #
-    diags.sort(key=lambda x: x.tag, reverse=False)
+    diags.sort(key=lambda x: x.area, reverse=True)
     initial_sorting = [assign_label_to_diag(diag, labels, fig_bbox) for diag in diags]
 
     # Identify failures by the presence of duplicate labels
@@ -348,9 +333,6 @@ def read_diagram_pyosra(diag, extension='jpg', debug=False, superatom_path=super
     if not debug:
         imdel(temp_img_fname)
 
-    # mmaser addition to remove spaces from smiles outputs. clean_output
-    # function in clean.py has this line commented out
-    smile = smile.replace(' ', '')    
     smile = clean_output(smile)
     return smile
 
@@ -420,16 +402,11 @@ def get_bounding_box(fig):
 
     :param fig: Input Figure
     :returns panels: List of panel objects
-    # mmaser note can supply fig as second arg to regionprops, so
-    # regions = regionprops(fig.img, intensity_image=fig)
-    #
     """
     panels = []
     regions = regionprops(fig.img)
     for region in regions:
-        # mmaser y1, x1, y2, x2 = (top, left, bottom, right), 
         y1, x1, y2, x2 = region.bbox
-        # mmaser: Panel object now has .centroid property
         panels.append(Panel(x1, x2, y1, y2, region.label - 1))# Sets tags to start from 0
     return panels
 

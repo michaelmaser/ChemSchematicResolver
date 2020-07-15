@@ -1,0 +1,5 @@
+# TODO write script for running csr.extract_image over a directory
+# and dumping results as json (try to match reaction generator json output)
+# or even load that json and add prediction results directly to json
+# as output tags or just construct the reaction smiles directly
+# TODO add silyl abbreviations to dict/superatom.txt (check spelling.txt)
